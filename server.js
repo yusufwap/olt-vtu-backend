@@ -33,6 +33,8 @@ app.post("/purchase-airtime", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing network, phone, or amount" });
     }
     const request_id = genRequestId();
+    const payload = { request_id, serviceID, amount, phone };
+    console.log("Airtime request:", payload);
     const r = await fetch(`${VTPASS_BASE}/pay`, {
       method: "POST",
       headers: {
@@ -40,12 +42,14 @@ app.post("/purchase-airtime", async (req, res) => {
         "api-key": API_KEY,
         "secret-key": SECRET_KEY,
       },
-      body: JSON.stringify({ request_id, serviceID, amount, phone }),
+      body: JSON.stringify(payload),
     });
     const data = await r.json();
+    console.log("Airtime response:", JSON.stringify(data));
     res.json({ ok: data.code === "000", requestId: request_id, data });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error("Airtime error:", e);
+    res.status(500).json({ ok: false, error: e.message || String(e) });
   }
 });
 
