@@ -1,0 +1,15 @@
+{
+  "name": "olt-vtu-backend",
+  "version": "1.0.0",
+  "description": "One Love Tech VTU backend — safely calls VTpass API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
