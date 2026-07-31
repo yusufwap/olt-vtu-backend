@@ -12,6 +12,6 @@
   },
   "engines": {
     "node": ">=18"
-npm install axios
+   npm install axios
   }
 }
