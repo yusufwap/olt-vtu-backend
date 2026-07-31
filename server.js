@@ -1,104 +1,141 @@
-// One Love Tech VTU Backend
-// Keeps your VTpass API key/secret safe on the server — never in the app.
-const express = require("express");
-const cors = require("cors");
+// OLT VTU Backend — Clubkonnect integration
+// Replaces the old VTpass calls with Clubkonnect (nellobytesystems.com)
+
+const express = require('express');
+const axios = require('axios');
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-// Set these in your hosting provider's Environment Variables — never hardcode them here.
-const VTPASS_BASE = process.env.VTPASS_ENV === "live"
-  ? "https://vtpass.com/api"
-  : "https://sandbox.vtpass.com/api";
-const API_KEY = process.env.VTPASS_API_KEY;
-const SECRET_KEY = process.env.VTPASS_SECRET_KEY;
-const PUBLIC_KEY = process.env.VTPASS_PUBLIC_KEY;
+const CLUBKONNECT_USERID = process.env.CLUBKONNECT_USERID; // e.g. CK101285996
+const CLUBKONNECT_APIKEY = process.env.CLUBKONNECT_APIKEY;
+const BASE_URL = 'https://www.nellobytesystems.com';
 
-function genRequestId() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
-  return stamp + Math.random().toString(36).slice(2, 10);
-}
+// Network codes confirmed from Clubkonnect's official Available Mobile Networks table
+const NETWORK_CODES = {
+  MTN: '01',
+  GLO: '02',
+  '9MOBILE': '03',
+  AIRTEL: '04',
+};
 
-// Maps network id from the app to VTpass serviceID
-const AIRTIME_SERVICE = { mtn: "mtn", glo: "glo", airtel: "airtel", "9mobile": "etisalat" };
-const DATA_SERVICE = { mtn: "mtn-data", glo: "glo-data", airtel: "airtel-data", "9mobile": "etisalat-data" };
+// Common bundles pulled from Clubkonnect's Available Data Plans table.
+// Add more keys any time by copying `PlanID — description` pairs from
+// your dashboard's Data bundle API page.
+const DATA_PLANS = {
+  MTN: {
+    '500MB_Monthly': '500.00',
+    '1GB_Monthly': '1000.00',
+    '2GB_Monthly': '2000.00',
+    '3GB_Monthly': '3000.00',
+    '5GB_Monthly': '5000.00',
+  },
+  GLO: {
+    '1GB_30days': '1000',
+    '2GB_30days': '2000',
+    '3GB_30days': '3000',
+    '5GB_30days': '5000',
+    '10GB_30days': '10000',
+  },
+  AIRTEL: {
+    '2GB_30days': '1499.93',
+    '3GB_30days': '1999.91',
+    '4GB_30days': '2499.92',
+    '8GB_30days': '2999.92',
+    '10GB_30days': '3999.91',
+    '13GB_30days': '4999.92',
+    '18GB_30days': '5999.91',
+    '25GB_30days': '7999.91',
+  },
+  '9MOBILE': {
+    '500MB_30days': '500',
+    '1GB_30days': '1000',
+    '2GB_30days': '2000',
+    '3GB_30days': '3000',
+    '5GB_30days': '5000',
+    '10GB_30days': '10000',
+  },
+};
 
-app.post("/purchase-airtime", async (req, res) => {
+// --- Airtime purchase ---
+app.post('/api/airtime', async (req, res) => {
   try {
     const { network, phone, amount } = req.body;
-    const serviceID = AIRTIME_SERVICE[network];
-    if (!serviceID || !phone || !amount) {
-      return res.status(400).json({ ok: false, error: "Missing network, phone, or amount" });
+    const networkCode = NETWORK_CODES[network?.toUpperCase()];
+    if (!networkCode) {
+      return res.status(400).json({ error: 'Unknown network' });
     }
-    const request_id = genRequestId();
-    const payload = { request_id, serviceID, amount, phone };
-    console.log("Airtime request:", payload);
-    const r = await fetch(`${VTPASS_BASE}/pay`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": API_KEY,
-        "secret-key": SECRET_KEY,
+
+    const requestId = `OLT${Date.now()}`;
+
+    const response = await axios.get(`${BASE_URL}/APIAirtimeV1.asp`, {
+      params: {
+        UserID: CLUBKONNECT_USERID,
+        APIKey: CLUBKONNECT_APIKEY,
+        MobileNetwork: networkCode,
+        Amount: amount,
+        MobileNumber: phone,
+        RequestID: requestId,
       },
-      body: JSON.stringify(payload),
     });
-    const data = await r.json();
-    console.log("Airtime response:", JSON.stringify(data));
-    res.json({ ok: data.code === "000", requestId: request_id, data });
-  } catch (e) {
-    console.error("Airtime error:", e);
-    res.status(500).json({ ok: false, error: e.message || String(e) });
+
+    res.json({ requestId, result: response.data });
+  } catch (err) {
+    console.error('Airtime error:', err.message);
+    res.status(500).json({ error: 'Airtime purchase failed' });
   }
 });
 
-app.post("/purchase-data", async (req, res) => {
+// --- Data bundle purchase ---
+app.post('/api/data', async (req, res) => {
   try {
-    const { network, phone, variation_code, amount } = req.body;
-    const serviceID = DATA_SERVICE[network];
-    if (!serviceID || !phone || !variation_code) {
-      return res.status(400).json({ ok: false, error: "Missing network, phone, or plan" });
+    const { network, phone, planKey } = req.body;
+    const netKey = network?.toUpperCase();
+    const networkCode = NETWORK_CODES[netKey];
+    const dataPlanId = DATA_PLANS[netKey]?.[planKey];
+
+    if (!networkCode) {
+      return res.status(400).json({ error: 'Unknown network' });
     }
-    const request_id = genRequestId();
-    const r = await fetch(`${VTPASS_BASE}/pay`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": API_KEY,
-        "secret-key": SECRET_KEY,
+    if (!dataPlanId) {
+      return res.status(400).json({ error: 'Data plan not configured yet — add its ID to DATA_PLANS' });
+    }
+
+    const requestId = `OLT${Date.now()}`;
+
+    const response = await axios.get(`${BASE_URL}/APIDatabundleV1.asp`, {
+      params: {
+        UserID: CLUBKONNECT_USERID,
+        APIKey: CLUBKONNECT_APIKEY,
+        MobileNetwork: networkCode,
+        DataPlan: dataPlanId,
+        MobileNumber: phone,
+        RequestID: requestId,
       },
-      body: JSON.stringify({
-        request_id,
-        serviceID,
-        billersCode: phone,
-        variation_code,
-        phone,
-        amount,
-      }),
     });
-    const data = await r.json();
-    res.json({ ok: data.code === "000", requestId: request_id, data });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+
+    res.json({ requestId, result: response.data });
+  } catch (err) {
+    console.error('Data bundle error:', err.message);
+    res.status(500).json({ error: 'Data purchase failed' });
   }
 });
 
-// Fetch live data plans for a network (so prices/plans always match VTpass, not hardcoded)
-app.get("/data-plans/:network", async (req, res) => {
+// --- Query transaction status ---
+app.get('/api/status/:orderId', async (req, res) => {
   try {
-    const serviceID = DATA_SERVICE[req.params.network];
-    const r = await fetch(`${VTPASS_BASE}/service-variations?serviceID=${serviceID}`, {
-      headers: { "api-key": API_KEY, "public-key": PUBLIC_KEY },
+    const response = await axios.get(`${BASE_URL}/APIQueryV1.asp`, {
+      params: {
+        UserID: CLUBKONNECT_USERID,
+        APIKey: CLUBKONNECT_APIKEY,
+        OrderID: req.params.orderId,
+      },
     });
-    const data = await r.json();
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.json(response.data);
+  } catch (err) {
+    console.error('Status query error:', err.message);
+    res.status(500).json({ error: 'Status check failed' });
   }
 });
-
-app.get("/", (req, res) => res.send("One Love Tech VTU backend is running."));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`OLT VTU backend running on port ${PORT}`));
